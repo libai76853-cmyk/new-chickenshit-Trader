@@ -1,0 +1,16 @@
+# Python 3.12 (pyqlib 0.9.7 ships cp312 wheels for macOS arm64). Install: make venv
+pyqlib==0.9.7
+lightgbm==4.7.0
+yfinance==1.7.0
+pandas==3.0.6
+numpy==2.5.3
+scipy==1.18.1
+matplotlib==3.11.2
+pyarrow==25.0.1
+lxml
+requests
+loguru
+fire
+tqdm
+pyyaml
+pytest

@@ -1,0 +1,20 @@
+# python
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# data (rebuild with `make data`)
+data/
+!data/.gitkeep
+
+# qlib / mlflow runtime
+mlruns/
+*.log
+
+# os / editor
+.DS_Store
+.idea/
+.vscode/
