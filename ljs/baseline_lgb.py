@@ -61,9 +61,18 @@ def build_dataset(cfg: dict, segments: dict):
     from qlib.contrib.data.handler import Alpha158
     from qlib.data.dataset import DatasetH
 
+    class Alpha158NoVWAP(Alpha158):
+        """Alpha158 minus VWAP0: Yahoo has no vwap field, so that feature would be all-NaN -> constant."""
+
+        def get_feature_config(self):
+            from qlib.contrib.data.loader import Alpha158DL
+
+            conf = {"kbar": {}, "price": {"windows": [0], "feature": ["OPEN", "HIGH", "LOW"]}, "rolling": {}}
+            return Alpha158DL.get_feature_config(conf)
+
     dcfg = cfg["dataset"]
     train_start, train_end = segments["train"]
-    handler = Alpha158(
+    handler = Alpha158NoVWAP(
         instruments=cfg["data"]["universe_name"],
         start_time=train_start,
         end_time=segments["test"][1],
@@ -142,6 +151,19 @@ def run_backtest(cfg: dict, pred: pd.Series, start: str, end: str):
     return report, positions
 
 
+def universe_equal_weight_returns(cfg: dict, start: str, end: str) -> pd.Series:
+    """Daily return of an equal-weight portfolio of the whole tradable universe (rebalanced daily).
+    Isolates what the *universe choice* (current S&P 500 members -> survivorship bias) and equal
+    weighting contribute, independent of the model. Computed from adjusted $close."""
+    from qlib.data import D
+
+    inst = D.instruments(cfg["data"]["universe_name"])
+    df = D.features(inst, ["$close/Ref($close,1)-1"], start_time=start, end_time=end)
+    r = df.iloc[:, 0].groupby(level="datetime").mean()
+    r.name = "ew_universe"
+    return r
+
+
 def perf_stats(r: pd.Series) -> dict:
     """Annualized stats of a daily return series (simple sum convention, like qlib.risk_analysis with N=252)."""
     r = r.dropna()
@@ -161,13 +183,16 @@ def perf_stats(r: pd.Series) -> dict:
 
 def yearly_table(report: pd.DataFrame) -> pd.DataFrame:
     strat = report["return"] - report["cost"]
-    df = pd.DataFrame({"strategy": strat, "spy": report["bench"], "excess": strat - report["bench"], "turnover": report["turnover"]})
+    df = pd.DataFrame({"strategy": strat, "spy": report["bench"], "ew": report["ew_universe"],
+                       "excess": strat - report["bench"], "excess_ew": strat - report["ew_universe"], "turnover": report["turnover"]})
     g = df.groupby(df.index.year)
     out = pd.DataFrame(
         {
             "strategy": g["strategy"].apply(lambda x: (1 + x).prod() - 1),
             "spy": g["spy"].apply(lambda x: (1 + x).prod() - 1),
+            "ew": g["ew"].apply(lambda x: (1 + x).prod() - 1),
             "excess": g["excess"].sum(),
+            "excess_ew": g["excess_ew"].sum(),
             "avg_daily_turnover": g["turnover"].mean(),
             "days": g.size(),
         }
@@ -176,8 +201,17 @@ def yearly_table(report: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def feature_importance(model, n: int = 20) -> pd.Series:
+def feature_importance(model, names: list[str], n: int = 20) -> pd.Series:
+    """LightGBM sees the feature matrix as numpy, so booster names are Column_<i>; map back to Alpha158 names."""
     fi = model.get_feature_importance(importance_type="gain")
+    idx = []
+    for k in fi.index:
+        if isinstance(k, str) and k.startswith("Column_"):
+            i = int(k.split("_")[1])
+            idx.append(names[i] if i < len(names) else k)
+        else:
+            idx.append(k)
+    fi.index = idx
     return fi.sort_values(ascending=False).head(n)
 
 
@@ -192,8 +226,10 @@ def plot_curves(report: pd.DataFrame, path: Path) -> None:
     bench = (1 + report["bench"]).cumprod()
     excess = (1 + report["return"] - report["cost"] - report["bench"]).cumprod()
     fig, ax = plt.subplots(2, 1, figsize=(10, 7), sharex=True, gridspec_kw={"height_ratios": [2, 1]})
+    ew = (1 + report["ew_universe"].fillna(0)).cumprod()
     ax[0].plot(strat.index, strat.values, label="LightGBM top-k (after cost)")
     ax[0].plot(bench.index, bench.values, label="SPY")
+    ax[0].plot(ew.index, ew.values, label="equal-weight universe (survivorship-biased)", ls="--")
     ax[0].set_ylabel("growth of 1")
     ax[0].legend()
     ax[0].grid(alpha=0.3)
@@ -215,12 +251,12 @@ def write_report(path: Path, cfg: dict, segments: dict, meta: dict, ic: dict, ic
                  perf: dict, yearly: pd.DataFrame, fi: pd.Series, plot_name: str, best_iter: int) -> None:
     d = cfg["dataset"]; b = cfg["backtest"]; m = cfg["model"]["kwargs"]
     L = []
-    L.append(f"# 基线报告：Alpha158 + LightGBM（标普 500，日频）\n")
+    L.append(f"# 基线报告：Alpha158 + LightGBM（股票池 `{cfg['data']['universe_name']}`，日频）\n")
     L.append(f"生成时间：{meta['generated_at']}  ·  代码版本：{meta.get('git_rev','n/a')}\n")
     L.append("## 数据\n")
-    L.append(f"- 股票池：当前标普 500 成分股 {meta['n_instruments']} 只（Wikipedia 名单，存在幸存者偏差，见下文）")
+    L.append(f"- 股票池：`{cfg['data']['universe_name']}`，{meta['n_instruments']} 只。{cfg.get('run', {}).get('universe_note', '当前标普 500 成分股（Wikipedia 名单），存在幸存者偏差，见下文')}")
     L.append(f"- 基准：{cfg['data']['benchmark']}；数据：Yahoo 日线，{meta['data_start']} → {meta['data_end']}，{meta['n_days_total']} 个交易日")
-    L.append(f"- 特征：Qlib Alpha158（{meta['n_features']} 个），RobustZScore 归一化 + 缺失填零；标签：`{d['label']}`（{d['horizon_days']} 日前向收益，t+1 收盘进、t+{d['horizon_days']+1} 收盘出，无未来函数），训练时对标签做横截面排序归一化")
+    L.append(f"- 特征：Qlib Alpha158 去掉 VWAP0（Yahoo 无成交均价字段），共 {meta['n_features']} 个，RobustZScore 归一化 + 缺失填零；标签：`{d['label']}`（{d['horizon_days']} 日前向收益，t+1 收盘进、t+{d['horizon_days']+1} 收盘出，无未来函数），训练时对标签做横截面排序归一化")
     L.append(f"- 切分：训练 {segments['train'][0]} → {segments['train'][1]}；验证 {segments['valid'][0]} → {segments['valid'][1]}；测试 {segments['test'][0]} → {segments['test'][1]}（单次切分，非滚动）\n")
     L.append("## 模型\n")
     L.append(f"- LightGBM，Qlib 公开基准参数：learning_rate {m['learning_rate']}，num_leaves {m['num_leaves']}，max_depth {m['max_depth']}，lambda_l1 {m['lambda_l1']}，lambda_l2 {m['lambda_l2']}，colsample {m['colsample_bytree']}，subsample {m['subsample']}")
@@ -242,18 +278,19 @@ def write_report(path: Path, cfg: dict, segments: dict, meta: dict, ic: dict, ic
     L.append("")
     L.append("## 回测（多头 top-k，等权，日频调仓，扣费）\n")
     L.append(f"- 策略：每日按预测分数持有前 {b['topk']} 只，每日最多换出 {b['n_drop']} 只（Qlib TopkDropout）；初始资金 {b['account']:,}；成本买卖各 {b['open_cost']*1e4:.0f} bp，最低 {b['min_cost']} 美元；收盘价成交\n")
-    L.append("| 指标 | 策略（扣费） | SPY | 超额（扣费） |\n|---|---|---|---|")
-    s, k, e = perf["strategy"], perf["spy"], perf["excess"]
-    L.append(f"| 年化收益 | {_pct(s['ann_return'])} | {_pct(k['ann_return'])} | {_pct(e['ann_return'])} |")
-    L.append(f"| 年化波动 | {_pct(s['ann_vol'])} | {_pct(k['ann_vol'])} | {_pct(e['ann_vol'])} |")
-    L.append(f"| 夏普 / 信息比率 | {s['sharpe_or_ir']:.2f} | {k['sharpe_or_ir']:.2f} | {e['sharpe_or_ir']:.2f} |")
-    L.append(f"| 最大回撤 | {_pct(s['max_drawdown'])} | {_pct(k['max_drawdown'])} | {_pct(e['max_drawdown'])} |")
-    L.append(f"| 区间总收益 | {_pct(s['total_return'])} | {_pct(k['total_return'])} | {_pct(e['total_return'])} |")
-    L.append(f"| 扣费前超额年化 | {_pct(perf['excess_gross']['ann_return'])} | | 成本拖累年化 {_pct(perf['excess_gross']['ann_return'] - e['ann_return'])} |\n")
+    L.append("「等权股票池」= 同一批 500 只股票每日等权持有，不用任何模型。它和 SPY 的差距就是股票池选择（幸存者偏差）加等权效应的贡献；**策略只有超过它的部分才可能是模型的功劳。**\n")
+    L.append("| 指标 | 策略（扣费） | SPY | 等权股票池 | 超额 vs SPY | 超额 vs 等权股票池 |\n|---|---|---|---|---|---|")
+    s, k, w, e, ee = perf["strategy"], perf["spy"], perf["ew_universe"], perf["excess"], perf["excess_vs_ew"]
+    L.append(f"| 年化收益 | {_pct(s['ann_return'])} | {_pct(k['ann_return'])} | {_pct(w['ann_return'])} | {_pct(e['ann_return'])} | {_pct(ee['ann_return'])} |")
+    L.append(f"| 年化波动 | {_pct(s['ann_vol'])} | {_pct(k['ann_vol'])} | {_pct(w['ann_vol'])} | {_pct(e['ann_vol'])} | {_pct(ee['ann_vol'])} |")
+    L.append(f"| 夏普 / 信息比率 | {s['sharpe_or_ir']:.2f} | {k['sharpe_or_ir']:.2f} | {w['sharpe_or_ir']:.2f} | {e['sharpe_or_ir']:.2f} | {ee['sharpe_or_ir']:.2f} |")
+    L.append(f"| 最大回撤 | {_pct(s['max_drawdown'])} | {_pct(k['max_drawdown'])} | {_pct(w['max_drawdown'])} | {_pct(e['max_drawdown'])} | {_pct(ee['max_drawdown'])} |")
+    L.append(f"| 区间总收益 | {_pct(s['total_return'])} | {_pct(k['total_return'])} | {_pct(w['total_return'])} | {_pct(e['total_return'])} | {_pct(ee['total_return'])} |")
+    L.append(f"| 成本拖累（年化） | {_pct(perf['excess_gross']['ann_return'] - e['ann_return'])} | | | | |\n")
     L.append("按年：\n")
-    L.append("| 年 | 策略 | SPY | 超额 | 日均换手 | 天数 |\n|---|---|---|---|---|---|")
+    L.append("| 年 | 策略 | SPY | 等权股票池 | 超额 vs SPY | 超额 vs 等权 | 日均换手 | 天数 |\n|---|---|---|---|---|---|---|---|")
     for y, r in yearly.iterrows():
-        L.append(f"| {y} | {_pct(r['strategy'])} | {_pct(r['spy'])} | {_pct(r['excess'])} | {_pct(r['avg_daily_turnover'])} | {int(r['days'])} |")
+        L.append(f"| {y} | {_pct(r['strategy'])} | {_pct(r['spy'])} | {_pct(r['ew'])} | {_pct(r['excess'])} | {_pct(r['excess_ew'])} | {_pct(r['avg_daily_turnover'])} | {int(r['days'])} |")
     L.append("")
     L.append(f"![curves]({plot_name})\n")
     L.append("## 最重要的 20 个特征（LightGBM gain）\n")
@@ -263,7 +300,7 @@ def write_report(path: Path, cfg: dict, segments: dict, meta: dict, ic: dict, ic
         L.append(f"| {name} | {_pct(v / tot)} |")
     L.append("")
     L.append("## 必须知道的局限\n")
-    L.append("1. **幸存者偏差**：股票池是 2026 年的标普 500 名单，回测期内被剔除、破产、被收购的公司不在里面。这会抬高多头组合收益，也可能抬高 IC。修复需要历史成分股名单（下一阶段）。")
+    L.append("1. **幸存者偏差**：股票池是 2026 年的标普 500 名单，回测期内被剔除、破产、被收购的公司不在里面。这会抬高多头组合收益，也可能抬高 IC。上表「等权股票池」一列就是这个偏差的量级；修复需要历史成分股名单（下一阶段）。")
     L.append("2. **单次切分**：一次训练、一段测试。生产上要滚动重训（每年或每季），结果通常会打折。")
     L.append("3. **成本假设简化**：每边 5 bp 是大盘股的粗估，未建模冲击成本和隔夜跳空；日频调仓的换手率决定了成本敏感度，见按年表的换手列。")
     L.append("4. **标签与调仓错配**：标签是 5 日收益，回测是日频 TopkDropout 调仓，持仓期由 n_drop 隐式决定，不是严格的 5 日持有。")
@@ -292,6 +329,7 @@ def run(cfg_path: str | Path, tag: str | None = None) -> Path:
     train_df = ds.prepare("train", col_set=["feature", "label"], data_key="learn")
     logger.info(f"train rows {len(train_df):,}, features {train_df['feature'].shape[1]}")
     n_features = train_df["feature"].shape[1]
+    feature_names = [c[1] if isinstance(c, tuple) else str(c) for c in train_df["feature"].columns]
     del train_df
 
     model = train_model(cfg, ds)
@@ -305,20 +343,25 @@ def run(cfg_path: str | Path, tag: str | None = None) -> Path:
     logger.info(f"test IC {ic['ic_mean']:.4f} RankIC {ic['rank_ic_mean']:.4f} RankICIR {ic['rank_icir']:.3f}")
 
     report, positions = run_backtest(cfg, pred, segments["test"][0], segments["test"][1])
+    ew = universe_equal_weight_returns(cfg, segments["test"][0], segments["test"][1])
+    report["ew_universe"] = ew.reindex(report.index)
     strat_net = report["return"] - report["cost"]
     perf = {
         "strategy": perf_stats(strat_net),
         "spy": perf_stats(report["bench"]),
+        "ew_universe": perf_stats(report["ew_universe"]),
         "excess": perf_stats(strat_net - report["bench"]),
+        "excess_vs_ew": perf_stats(strat_net - report["ew_universe"]),
         "excess_gross": perf_stats(report["return"] - report["bench"]),
     }
-    logger.info(f"backtest: strat ann {perf['strategy']['ann_return']:.3f} vs SPY {perf['spy']['ann_return']:.3f}; excess IR {perf['excess']['sharpe_or_ir']:.2f}")
+    logger.info(f"backtest: strat ann {perf['strategy']['ann_return']:.3f} vs SPY {perf['spy']['ann_return']:.3f} vs EW universe {perf['ew_universe']['ann_return']:.3f}; excess-vs-EW IR {perf['excess_vs_ew']['sharpe_or_ir']:.2f}")
 
     # ---- persist
     stamp = tag or dt.date.today().strftime("%Y%m%d")
+    prefix = cfg.get("run", {}).get("name", "baseline_lgb")
     out_dir = REPO / "reports"
     out_dir.mkdir(exist_ok=True)
-    art_dir = REPO / "data" / "artifacts" / f"baseline_lgb_{stamp}"
+    art_dir = REPO / "data" / "artifacts" / f"{prefix}_{stamp}"
     art_dir.mkdir(parents=True, exist_ok=True)
     pred.rename("score").to_frame().join(label.rename("label")).to_parquet(art_dir / "pred_test.parquet")
     report.to_parquet(art_dir / "backtest_report.parquet")
@@ -336,15 +379,15 @@ def run(cfg_path: str | Path, tag: str | None = None) -> Path:
         "n_days_total": len(cal),
         "n_features": n_features,
     }
-    plot_name = f"baseline_lgb_{stamp}.png"
+    plot_name = f"{prefix}_{stamp}.png"
     plot_curves(report, out_dir / plot_name)
-    fi = feature_importance(model, 20)
+    fi = feature_importance(model, feature_names, 20)
     yearly = yearly_table(report)
-    report_path = out_dir / f"baseline_lgb_{stamp}.md"
+    report_path = out_dir / f"{prefix}_{stamp}.md"
     write_report(report_path, cfg, segments, meta, ic, ic_by_year(ic_daily), perf, yearly, fi, plot_name, best_iter)
     metrics = {"meta": meta, "segments": segments, "ic": ic, "perf": perf, "best_iteration": best_iter,
                "ic_by_year": ic_by_year(ic_daily).reset_index().to_dict(orient="records"),
                "yearly": yearly.reset_index().to_dict(orient="records"), "top_features": fi.to_dict()}
-    (out_dir / f"baseline_lgb_{stamp}.json").write_text(json.dumps(metrics, indent=1, default=float), encoding="utf-8")
+    (out_dir / f"{prefix}_{stamp}.json").write_text(json.dumps(metrics, indent=1, default=float), encoding="utf-8")
     logger.info(f"report -> {report_path} ({(dt.datetime.now()-t0).total_seconds()/60:.1f} min)")
     return report_path

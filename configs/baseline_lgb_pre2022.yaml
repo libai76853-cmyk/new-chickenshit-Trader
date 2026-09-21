@@ -1,7 +1,8 @@
+# Survivorship check: same as baseline_lgb.yaml but universe = members as of test start.
 # Stage-1 baseline: S&P 500 daily bars -> Alpha158 -> LightGBM -> RankIC + cost-aware backtest.
 run:
-  name: baseline_lgb            # report file prefix
-  universe_note: 当前标普 500 成分股（Wikipedia 名单），含 2022 年后才入选的 78 只，存在幸存者偏差，见下文
+  name: baseline_lgb_pre2022    # report file prefix
+  universe_note: 仅保留 2022-01-01（测试期开始）之前已入选标普 500 的成员，去掉“后来才入选”的幸存者偏差；被剔除公司仍缺失
 
 data:
   start: "2010-01-01"
@@ -10,7 +11,7 @@ data:
   norm_dir: data/normalized
   qlib_dir: data/qlib/us_sp500
   universe_cache: data/universe_sp500.json
-  universe_name: sp500   # instruments/<name>.txt (benchmark excluded)
+  universe_name: sp500_pre2022   # members as of test start; written by scripts/01_build_data.py
   benchmark: SPY
   min_rows: 250          # drop symbols with < 1 trading year of data
   chunk_size: 20

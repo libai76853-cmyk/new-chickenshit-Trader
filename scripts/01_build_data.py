@@ -16,7 +16,7 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 from ljs.universe import load_universe, BENCHMARK  # noqa: E402
 from ljs.data_yahoo import download_raw, load_calendar, normalize_all  # noqa: E402
-from ljs.dump_qlib import dump_all, write_universe_instruments, write_future_calendar  # noqa: E402
+from ljs.dump_qlib import dump_all, write_universe_instruments, write_future_calendar, write_members_asof_instruments  # noqa: E402
 
 
 def main() -> None:
@@ -27,7 +27,8 @@ def main() -> None:
     ap.add_argument("--limit", type=int, default=None, help="debug: only first N symbols")
     args = ap.parse_args()
 
-    cfg = yaml.safe_load(Path(args.config).read_text())["data"]
+    full = yaml.safe_load(Path(args.config).read_text())
+    cfg = full["data"]
     start = cfg["start"]
     end = cfg["end"] or (dt.date.today() + dt.timedelta(days=1)).isoformat()  # yfinance end is exclusive
     raw_dir, norm_dir, qlib_dir = (REPO / cfg[k] for k in ("raw_dir", "norm_dir", "qlib_dir"))
@@ -46,6 +47,8 @@ def main() -> None:
     dump_all(norm_dir, qlib_dir, max_workers=cfg["dump_workers"])
     n = write_universe_instruments(qlib_dir, cfg["universe_name"], exclude={bench})
     write_future_calendar(qlib_dir)
+    asof = full["dataset"]["segments"]["test"][0]
+    write_members_asof_instruments(qlib_dir, uni, asof, name=f"{cfg['universe_name']}_pre{asof[:4]}")
     logger.info(f"DONE: {n} tradable symbols in instruments/{cfg['universe_name']}.txt; qlib_dir={qlib_dir}")
 
 

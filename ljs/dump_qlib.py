@@ -54,3 +54,17 @@ def write_future_calendar(qlib_dir: Path, extra_bdays: int = 60) -> Path:
     path.write_text("\n".join(out) + "\n")
     logger.info(f"future calendar: {len(days)} real + {extra_bdays} future days -> {path}")
     return path
+
+
+def write_members_asof_instruments(qlib_dir: Path, universe: pd.DataFrame, asof: str, name: str) -> int:
+    """instruments/<name>.txt: universe members whose Wikipedia `date_added` is before `asof`, i.e. index
+    members as of that date. Removes the "added later" half of survivorship bias (companies that joined the
+    index during the test period after big run-ups); the "removed later" half remains."""
+    added = pd.to_datetime(universe["date_added"].astype(str).str.slice(0, 10), errors="coerce")
+    keep = set(universe.loc[(added < pd.Timestamp(asof)) | added.isna(), "yahoo"].str.upper())
+    inst_dir = Path(qlib_dir) / "instruments"
+    lines = (inst_dir / "all.txt").read_text().splitlines()
+    out = [l for l in lines if l.split("\t")[0].upper() in keep]
+    (inst_dir / f"{name}.txt").write_text("\n".join(out) + "\n")
+    logger.info(f"instruments/{name}.txt: {len(out)} symbols were members before {asof}")
+    return len(out)

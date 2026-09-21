@@ -97,6 +97,12 @@ def download_raw(
     done = {s: out_dir / f"{s}.csv" for s in symbols if (out_dir / f"{s}.csv").exists()}
     logger.info(f"download: {len(symbols)} symbols, {len(todo)} to fetch, {len(done)} cached")
     n_chunks = (len(todo) - 1) // chunk_size + 1 if todo else 0
+    if todo:  # warm-up: the first request of a process is often answered 429 on the cookie/crumb fetch
+        try:
+            yf.download("SPY", period="5d", interval="1d", progress=False, threads=False, timeout=30)
+        except Exception:  # noqa: BLE001
+            pass
+        time.sleep(pause)
     for ci, i in enumerate(range(0, len(todo), chunk_size), start=1):
         remaining = todo[i : i + chunk_size]
         for attempt in range(1, retries + 1):
@@ -120,13 +126,13 @@ def download_raw(
             if not remaining:
                 break
             rl = _rate_limited(remaining)
-            if rl or df is None:
+            kind = "rate-limited" if (rl or df is None) else "unknown error"
+            if attempt < retries:  # always retry: Yahoo's failures are transient far more often than not
                 wait = backoff * attempt
-                logger.warning(f"chunk {ci}/{n_chunks}: rate-limited/failed for {len(remaining)} symbols; sleeping {wait:.0f}s (attempt {attempt}/{retries})")
+                logger.warning(f"chunk {ci}/{n_chunks}: {len(remaining)} symbols failed ({kind}); retry in {wait:.0f}s (attempt {attempt}/{retries})")
                 time.sleep(wait)
             else:
-                logger.warning(f"chunk {ci}/{n_chunks}: no Yahoo data for {remaining} (not a rate limit)")
-                break
+                logger.warning(f"chunk {ci}/{n_chunks}: giving up on {remaining} ({kind})")
         if remaining and stooq_fallback:
             for sym in list(remaining):
                 sub = download_stooq(sym, start, end)
