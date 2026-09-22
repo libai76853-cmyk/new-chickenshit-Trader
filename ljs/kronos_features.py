@@ -357,7 +357,8 @@ def evaluate(features_path: Path, norm_dir: Path, pred_len: int, out_json: Path,
         for k in ["kr_pvol|rv", "vol20|rv"]:
             ax[1].plot(ic_df.index, ic_df[k], label=f"{k} (mean {ic_df[k].mean():.3f})")
         ax[1].set_ylabel("RankIC vs realized vol"); ax[1].legend(fontsize=8); ax[1].grid(alpha=0.3)
-        fig.suptitle(title, fontsize=10); fig.tight_layout()
+        fig.suptitle(f"Kronos-small zero-shot signal on PIT S&P 500 - {out_json.stem}", fontsize=10)  # ASCII: default font lacks CJK glyphs
+        fig.tight_layout()
         fig.savefig(out_json.with_suffix(".png"), dpi=130); plt.close(fig)
     except Exception as e:  # noqa: BLE001
         logger.warning(f"plot failed: {e}")
