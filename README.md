@@ -11,7 +11,11 @@
                               top-k 多头，波动率目标仓位 → IBKR（模拟盘先行）
 ```
 
-## 现状（阶段 1：基线）
+## 现状
+
+阶段 1（基线）完成，结论：没有 alpha（见下）。阶段 2（Kronos 序列特征）进行中，见 [docs/05](docs/05_阶段2_Kronos序列特征.md)。
+
+### 阶段 1：基线
 
 | 环节 | 实现 |
 |---|---|
@@ -53,7 +57,9 @@ make data        # 下载 + 归一化 + 转 Qlib 格式（约 5 分钟；Yahoo �
 make baseline    # 训练 + 评估 + 回测，写 reports/
 make baseline CFG=configs/baseline_lgb_pit.yaml       # 逐日历史成分股（无幸存者偏差，正式基线）
 make baseline CFG=configs/baseline_lgb_pre2022.yaml   # 仅 2022 年初已入选成员（中间检验）
-make test        # 归一化逻辑的单元测试
+make test        # 单元测试
+make kronos-pilot  # 阶段 2：Kronos 零样本信号，干净窗口 2024-07 起，约 2 小时（MPS）
+make kronos-eval   # 阶段 2：评估 RankIC，写 reports/kronos_post2024h2.md
 ```
 
 两个脚本都读 `configs/baseline_lgb.yaml`；改标签、切分、模型参数、成本都在那里。
@@ -69,12 +75,15 @@ ljs/         universe.py              标普 500 当前名单（Wikipedia，带�
              data_yahoo.py            Yahoo 下载（按日志分类：退市放弃 / 限流退避）+ Qlib 风格归一化
              dump_qlib.py             调 dump_bin、写股票池文件、写未来交易日历
              baseline_lgb.py          Alpha158 + LightGBM + IC + 回测 + 报告
+             kronos_features.py       阶段 2：Kronos 采样路径 → 特征 → RankIC 评估（含动量/波动对照）
 scripts/     01_build_data.py         数据构建入口
              02_run_baseline.py       基线入口
+             03_kronos_pilot.py       阶段 2 入口（generate / evaluate）
              dump_bin.py              vendored from microsoft/qlib（MIT）
-docs/        01_ 模型评估、02_ 方案、03_ 阶段 1 基线结论、04_ 历史成分股与幸存者偏差修复
+docs/        01_ 模型评估、02_ 方案、03_ 阶段 1 基线结论、04_ 历史成分股与幸存者偏差修复、05_ 阶段 2 Kronos
+third_party/ kronos_model/            Kronos 的 model 包（MIT，vendored，两处补丁见 NOTICE.md）
 reports/     基线报告（提交到仓库）
-data/        原始/归一化/Qlib 数据、模型产物（不提交，make data 可重建）
+data/        原始/归一化/Qlib 数据、模型产物、HF 权重缓存、Kronos 特征（不提交）
 tests/       单元测试
 ```
 
