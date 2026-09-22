@@ -281,14 +281,15 @@ def evaluate(features_path: Path, norm_dir: Path, pred_len: int, out_json: Path,
             out = np.full(len(pos), np.nan)
             out[valid] = c.values[idx[valid]]
             return out
-        c0, c1, cH, cH1 = at(0), at(1), at(H), at(H + 1)
+        c0, c1, c2, cH, cH1 = at(0), at(1), at(2), at(H), at(H + 1)
         r_exec = cH1 / c1 - 1          # Qlib label: enter next close, exit H days later
         r_now = cH / c0 - 1            # what Kronos literally forecasts
+        r1 = c2 / c1 - 1               # one-day executable return (for kr_ret1 / rev1 / mom5)
         # realized vol over the next H days (log returns t+1..t+H)
         fut = np.stack([at(k) for k in range(0, H + 1)], axis=1)
         rv = np.nanstd(np.diff(np.log(fut), axis=1), axis=1)
         rows.append(pd.DataFrame({
-            "symbol": s, "date": g["date"].values, "r_exec": r_exec, "r_now": r_now, "rv": rv,
+            "symbol": s, "date": g["date"].values, "r_exec": r_exec, "r_now": r_now, "r1": r1, "rv": rv,
             "mom5": c0 / at(-5) - 1, "mom20": c0 / at(-20) - 1, "mom60": c0 / at(-60) - 1,
             "vol20": [np.nanstd(np.diff(lc.values[p-20:p+1])) if p >= 20 else np.nan for p in pos],
             "rev1": -(c0 / at(-1) - 1),
@@ -301,6 +302,9 @@ def evaluate(features_path: Path, norm_dir: Path, pred_len: int, out_json: Path,
         for target in ["r_exec", "r_now"]:
             ic = _spearman_by_date(df, feat, target)
             res["signals"][f"{feat}|{target}"] = {"rank_ic": float(ic.mean()), "std": float(ic.std()), "t": float(ic.mean() / ic.std() * np.sqrt(len(ic))), "n": int(len(ic)), "pos": float((ic > 0).mean())}
+    for feat in ["kr_ret1", "kr_ret", "rev1", "mom5"]:
+        ic = _spearman_by_date(df, feat, "r1")
+        res["signals"][f"{feat}|r1"] = {"rank_ic": float(ic.mean()), "std": float(ic.std()), "t": float(ic.mean() / ic.std() * np.sqrt(len(ic))), "n": int(len(ic)), "pos": float((ic > 0).mean())}
     for feat in ["kr_vol", "kr_pvol", "vol20"]:
         ic = _spearman_by_date(df, feat, "rv")
         res["signals"][f"{feat}|rv"] = {"rank_ic": float(ic.mean()), "std": float(ic.std()), "t": float(ic.mean() / ic.std() * np.sqrt(len(ic))), "n": int(len(ic)), "pos": float((ic > 0).mean())}
@@ -336,6 +340,27 @@ def evaluate(features_path: Path, norm_dir: Path, pred_len: int, out_json: Path,
     ic = _spearman_by_date(df, "kr_ret", "r_exec")
     res["kr_ret_by_year"] = {int(y): float(v) for y, v in ic.groupby(ic.index.year).mean().items()}
     out_json.write_text(json.dumps(res, indent=1, ensure_ascii=False))
+    # per-date IC series (parquet) and cumulative-IC plot
+    series = {k: _spearman_by_date(df, k, "r_exec") for k in ["kr_ret", "kr_ret_resid", "kr_pup", "mom20", "rev1"]}
+    series["kr_pvol|rv"] = _spearman_by_date(df, "kr_pvol", "rv")
+    series["vol20|rv"] = _spearman_by_date(df, "vol20", "rv")
+    ic_df = pd.DataFrame(series)
+    ic_df.to_parquet(out_json.with_name(out_json.stem + "_ic_by_date.parquet"))
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        fig, ax = plt.subplots(2, 1, figsize=(10, 7), sharex=True)
+        for k in ["kr_ret", "kr_ret_resid", "kr_pup", "mom20", "rev1"]:
+            ax[0].plot(ic_df.index, ic_df[k].cumsum(), label=f"{k} (mean {ic_df[k].mean():.4f})")
+        ax[0].axhline(0, color="grey", lw=0.8); ax[0].set_ylabel("cumulative RankIC vs r_exec"); ax[0].legend(fontsize=8); ax[0].grid(alpha=0.3)
+        for k in ["kr_pvol|rv", "vol20|rv"]:
+            ax[1].plot(ic_df.index, ic_df[k], label=f"{k} (mean {ic_df[k].mean():.3f})")
+        ax[1].set_ylabel("RankIC vs realized vol"); ax[1].legend(fontsize=8); ax[1].grid(alpha=0.3)
+        fig.suptitle(title, fontsize=10); fig.tight_layout()
+        fig.savefig(out_json.with_suffix(".png"), dpi=130); plt.close(fig)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"plot failed: {e}")
     # markdown
     L = [f"# {title}\n", f"样本：{res['n_obs']:,} 个（股票, 日期）对，{res['n_dates']} 个调度日，{res['date_range'][0]} → {res['date_range'][1]}；目标 r_exec = t+1 收盘进、t+{pred_len+1} 收盘出（与 Qlib 标签一致），r_now = t → t+{pred_len}。\n",
          "| 信号 | 目标 | RankIC | t 值 | 正天数占比 | n |\n|---|---|---|---|---|---|"]
@@ -345,6 +370,7 @@ def evaluate(features_path: Path, norm_dir: Path, pred_len: int, out_json: Path,
     q = res["kr_ret_q5_minus_q1"]
     L.append(f"\nkr_ret 五分位多空（Q5−Q1）每期均值 {q['mean_per_period']*100:.3f}%，t {q['t']:.2f}，粗略年化 {q['annualized_approx']*100:.1f}%（不含成本）。\n")
     L.append("kr_ret 对 r_exec 的 RankIC 按年：" + ", ".join(f"{y}: {v:.4f}" for y, v in res["kr_ret_by_year"].items()) + "\n")
+    L.append(f"![ic]({out_json.stem}.png)\n")
     L.append("kr_ret 与对照信号的横截面 Spearman 相关（按日均值）：" + ", ".join(f"{c}: {v:.3f}" for c, v in res["kr_ret_vs_controls"].items()) + "。`kr_ret_resid` 是把 kr_ret 的秩对这些对照的秩逐日回归后的残差。\n")
     out_md.write_text("\n".join(L), encoding="utf-8")
     return res
