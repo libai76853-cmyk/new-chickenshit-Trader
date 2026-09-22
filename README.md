@@ -60,6 +60,7 @@ make baseline CFG=configs/baseline_lgb_pre2022.yaml   # 仅 2022 年初已入选
 make test        # 单元测试
 make kronos-pilot  # 阶段 2：Kronos 零样本信号，干净窗口 2024-07 起，约 2 小时（MPS）
 make kronos-eval   # 阶段 2：评估 RankIC，写 reports/kronos_post2024h2.md
+make edgar-events  # 阶段 3 第一步：EDGAR 8-K 事件面板 + 事件研究（需先在 .env.local 里写 EDGAR_UA，见下）
 ```
 
 两个脚本都读 `configs/baseline_lgb.yaml`；改标签、切分、模型参数、成本都在那里。
@@ -88,6 +89,8 @@ tests/       单元测试
 ```
 
 ## 已知坑
+
+- **SEC EDGAR 要求 User-Agent 声明联系方式**（格式 `Name you@example.com`），否则返回 403 "Undeclared Automated Tool"，且 IP 会被封约 10 分钟，封禁期内任何请求都会重置计时。把联系方式写在仓库根目录的 `.env.local`（已 gitignore）：`EDGAR_UA=Your Name you@example.com`。代码限速 5 请求/秒。
 
 - Qlib 在 macOS 上用多进程算因子，**入口脚本必须是文件且有 `if __name__ == "__main__":` 保护**（`python -` 从标准输入跑也会挂死），否则子进程重新导入主模块导致死锁。
 - mlflow ≥ 3.16 默认禁用文件后端，Qlib 训练时会报错；代码里已设 `MLFLOW_ALLOW_FILE_STORE=true`。

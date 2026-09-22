@@ -26,6 +26,23 @@ import requests
 from loguru import logger
 
 REPO = Path(__file__).resolve().parents[1]
+
+
+def _load_env_local() -> None:
+    """Read KEY=VALUE lines from <repo>/.env.local (git-ignored) into os.environ without overriding existing vars.
+    Used for EDGAR_UA so the SEC contact address never lands in the repository."""
+    f = REPO / ".env.local"
+    if f.exists():
+        for line in f.read_text().splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+
+
+_load_env_local()
+# SEC requires "Name contact@email" in the User-Agent; the noreply default is rejected as an undeclared tool,
+# so set EDGAR_UA (env or .env.local) to a real contact before running anything against sec.gov.
 UA = os.environ.get("EDGAR_UA", "new-chickenshit-Trader research libai76853-cmyk@users.noreply.github.com")
 HEADERS = {"User-Agent": UA, "Accept-Encoding": "gzip, deflate"}
 MIN_INTERVAL = 0.2  # seconds between requests (5 req/s, half of SEC's limit)

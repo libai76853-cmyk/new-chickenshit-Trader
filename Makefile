@@ -1,7 +1,7 @@
 PY := .venv/bin/python
 CFG := configs/baseline_lgb.yaml
 
-.PHONY: venv data baseline test clean-data kronos-pilot kronos-eval
+.PHONY: venv data baseline test clean-data kronos-pilot kronos-eval edgar-events
 
 venv:
 	/opt/homebrew/bin/python3.12 -m venv .venv
@@ -27,3 +27,8 @@ kronos-pilot:
 
 kronos-eval:
 	$(PY) -u scripts/03_kronos_pilot.py evaluate --features $(KR_OUT) --pred-len 5 --tag post2024h2
+
+# Stage 3 step 1: SEC EDGAR 8-K event panel + event study on the PIT universe.
+# Needs EDGAR_UA="Your Name you@example.com" in the environment or in .env.local (git-ignored).
+edgar-events:
+	$(PY) -u scripts/04_edgar_events.py --start 2010-01-01 --eval-start 2022-01-01
