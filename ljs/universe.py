@@ -47,7 +47,7 @@ def fetch_sp500_table(retries: int = 3, pause: float = 2.0) -> pd.DataFrame:
 
 
 def load_universe(cache_path: Path, refresh: bool = False) -> pd.DataFrame:
-    """Return DataFrame[symbol, yahoo, security, sector, sub_industry, date_added]; cached as JSON."""
+    """Return DataFrame[symbol, yahoo, security, sector, sub_industry, date_added, cik]; cached as JSON."""
     cache_path = Path(cache_path)
     if cache_path.exists() and not refresh:
         return pd.DataFrame(json.loads(cache_path.read_text()))
@@ -60,6 +60,7 @@ def load_universe(cache_path: Path, refresh: bool = False) -> pd.DataFrame:
             "sector": t["GICS Sector"].astype(str),
             "sub_industry": t["GICS Sub-Industry"].astype(str),
             "date_added": t["Date added"].astype(str),
+            "cik": pd.to_numeric(t["CIK"], errors="coerce").astype("Int64") if "CIK" in t.columns else pd.array([None] * len(t), dtype="Int64"),
         }
     ).drop_duplicates("yahoo").sort_values("yahoo").reset_index(drop=True)
     cache_path.parent.mkdir(parents=True, exist_ok=True)
