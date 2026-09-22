@@ -147,7 +147,7 @@ def write_report(path_md: Path, path_json: Path, title: str, es: pd.DataFrame, p
     L = [f"# {title}\n", f"事件面板：{meta['n_filings']:,} 份 8-K（{meta['n_symbols']} 只股票，{meta['start']} → {meta['end']}）；评估期 {meta['eval_start']} → {meta['eval_end']}，仅计入信号日为 PIT 成员的事件。异常收益 = 个股收益 − 当日 PIT 等权收益；t 值按日聚类。\n",
          "## 事件研究：按 8-K 项目\n", "| 项目 | 事件数 | 日数 | 信号日反应 ab_r0 | t | 次日 ab_r1 | t | 5 日 ab_r_exec | t | 5 日为正占比 |\n|---|---|---|---|---|---|---|---|---|---|"]
     for flag, r in es.iterrows():
-        L.append(f"| {flag} | {r['n_events']} | {r['n_dates']} | {r['ab_r0_mean']*100:.2f}% | {r['ab_r0_t']:.1f} | {r['ab_r1_mean']*100:.2f}% | {r['ab_r1_t']:.1f} | {r['ab_r_exec_mean']*100:.2f}% | {r['ab_r_exec_t']:.1f} | {r['ab_r_exec_pos']*100:.0f}% |")
+        L.append(f"| {flag} | {int(r['n_events'])} | {int(r['n_dates'])} | {r['ab_r0_mean']*100:.2f}% | {r['ab_r0_t']:.1f} | {r['ab_r1_mean']*100:.2f}% | {r['ab_r1_t']:.1f} | {r['ab_r_exec_mean']*100:.2f}% | {r['ab_r_exec_t']:.1f} | {r['ab_r_exec_pos']*100:.0f}% |")
     L.append("\n## 业绩公告后漂移（PEAD）：2.02 事件中，信号日反应能否预测后 5 日收益\n")
     for k, v in pead.items():
         L.append(f"- {k}: {v:.4f}" if isinstance(v, float) else f"- {k}: {v}")
