@@ -1,7 +1,8 @@
+# Point-in-time universe: same as baseline_lgb.yaml but each stock only while it was an index member.
 # Stage-1 baseline: S&P 500 daily bars -> Alpha158 -> LightGBM -> RankIC + cost-aware backtest.
 run:
-  name: baseline_lgb            # report file prefix
-  universe_note: 当前标普 500 成分股（Wikipedia 名单），含 2022 年后才入选的 78 只，存在幸存者偏差，见下文
+  name: baseline_lgb_pit        # report file prefix
+  universe_note: 逐日历史成分股（Wikipedia 变更表重建，Qlib 分段有效期），每只股票只在其成员期内参与训练、预测与选股；被收购退市者因 Yahoo 无数据缺失，见 docs/04
 
 data:
   start: "2010-01-01"
@@ -11,7 +12,7 @@ data:
   qlib_dir: data/qlib/us_sp500
   universe_cache: data/universe_sp500.json
   changes_cache: data/changes_sp500.json   # Wikipedia 'Historical components of the S&P 500'
-  universe_name: sp500   # instruments/<name>.txt (benchmark excluded)
+  universe_name: sp500_pit   # point-in-time spells; written by scripts/01_build_data.py
   benchmark: SPY
   min_rows: 250          # drop symbols with < 1 trading year of data
   chunk_size: 20

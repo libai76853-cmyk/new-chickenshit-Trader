@@ -11,6 +11,7 @@ data:
   norm_dir: data/normalized
   qlib_dir: data/qlib/us_sp500
   universe_cache: data/universe_sp500.json
+  changes_cache: data/changes_sp500.json   # Wikipedia 'Historical components of the S&P 500'
   universe_name: sp500_pre2022   # members as of test start; written by scripts/01_build_data.py
   benchmark: SPY
   min_rows: 250          # drop symbols with < 1 trading year of data

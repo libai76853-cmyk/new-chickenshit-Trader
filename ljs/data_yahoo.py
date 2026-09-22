@@ -13,6 +13,8 @@ Output columns: symbol,date,open,high,low,close,volume,factor,change
 """
 from __future__ import annotations
 
+import logging
+import re
 import time
 from pathlib import Path
 from typing import Iterable
@@ -48,14 +50,51 @@ def _frame_for(df: pd.DataFrame, sym: str) -> pd.DataFrame | None:
     return sub.reset_index()
 
 
-def _rate_limited(symbols: list[str]) -> list[str]:
-    """Symbols whose last yf.download error was a rate limit (yfinance stores per-ticker errors in shared._ERRORS)."""
+class _YFCapture(logging.Handler):
+    """Collect yfinance's per-ticker failure messages for one download() call.
+    Formats seen (yfinance 1.7): "$CERN: possibly delisted; no timezone found",
+    "$FB: Data doesn't exist for startDate = ...", "['A', 'B']: YFRateLimitError('Too Many Requests...')"."""
+
+    def __init__(self):
+        super().__init__(level=logging.WARNING)
+        self.msgs: dict[str, str] = {}
+
+    def emit(self, record: logging.LogRecord) -> None:
+        m = record.getMessage().strip()
+        hit = re.match(r"^\$?([A-Za-z0-9.\-^=]+): (.*)$", m)
+        if hit:
+            self.msgs[hit.group(1).upper()] = hit.group(2)
+            return
+        hit = re.match(r"^\[(.*?)\]: (.*)$", m, flags=re.S)
+        if hit:
+            for t in re.findall(r"'([^']+)'", hit.group(1)):
+                self.msgs.setdefault(t.upper(), hit.group(2))
+
+
+def _classify(msg: str | None) -> str:
+    if not msg:
+        return "unknown"
+    if re.search(r"rate limit|too many requests|429", msg, flags=re.I):
+        return "rate_limited"
+    if re.search(r"delisted|no timezone|data doesn't exist|no data found|quote not found|not found for symbol", msg, flags=re.I):
+        return "no_data"
+    return "unknown"
+
+
+def _download_chunk(symbols: list[str], start: str, end: str) -> tuple[pd.DataFrame | None, dict[str, str]]:
+    cap = _YFCapture()
+    lg = logging.getLogger("yfinance")
+    lg.addHandler(cap)
     try:
-        from yfinance import shared  # not re-exported at package level in yfinance 1.x
-        errs = getattr(shared, "_ERRORS", {}) or {}
-    except Exception:  # noqa: BLE001
-        return list(symbols)  # cannot tell -> assume rate limit and back off
-    return [s for s in symbols if s in errs and any(k in str(errs[s]) for k in ("Rate limit", "Too Many Requests", "429"))]
+        df = yf.download(symbols, start=start, end=end, interval="1d", auto_adjust=False,
+                         group_by="ticker", threads=False, progress=False, timeout=60)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"yf.download raised: {e}")
+        df = None
+        cap.msgs.setdefault("__ALL__", str(e))
+    finally:
+        lg.removeHandler(cap)
+    return df, cap.msgs
 
 
 def download_stooq(sym: str, start: str, end: str) -> pd.DataFrame | None:
@@ -86,17 +125,25 @@ def download_raw(
     pause: float = 2.0,
     backoff: float = 60.0,
     skip_existing: bool = True,
-    stooq_fallback: bool = True,
+    stooq_fallback: bool = False,
+    no_data_path: Path | None = None,
 ) -> dict[str, Path]:
-    """Download raw daily bars per symbol into out_dir/<SYM>.csv. Sequential requests (Yahoo rate-limits
-    concurrent crumb fetches); on rate limit sleep backoff*attempt and retry the missing symbols only."""
+    """Download raw daily bars per symbol into out_dir/<SYM>.csv.
+    Sequential requests (Yahoo rate-limits concurrent crumb fetches). Failures are classified from yfinance's
+    log messages: rate-limited -> sleep backoff*attempt and retry; no data (delisted/unknown symbol) -> give up
+    at once and remember it in `no_data_path` so later runs skip it; unknown -> retry a couple of times.
+    A chunk that returns nothing at all is treated as rate-limited."""
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     symbols = list(dict.fromkeys(symbols))
-    todo = [s for s in symbols if not (skip_existing and (out_dir / f"{s}.csv").exists())]
+    known_no_data: set[str] = set()
+    if no_data_path and Path(no_data_path).exists():
+        known_no_data = {l.split("\t")[0] for l in Path(no_data_path).read_text().splitlines() if l.strip()}
+    todo = [s for s in symbols if not (skip_existing and ((out_dir / f"{s}.csv").exists() or s in known_no_data))]
     done = {s: out_dir / f"{s}.csv" for s in symbols if (out_dir / f"{s}.csv").exists()}
-    logger.info(f"download: {len(symbols)} symbols, {len(todo)} to fetch, {len(done)} cached")
+    logger.info(f"download: {len(symbols)} symbols, {len(todo)} to fetch, {len(done)} cached, {len(known_no_data & set(symbols))} known no-data")
     n_chunks = (len(todo) - 1) // chunk_size + 1 if todo else 0
+    no_data: dict[str, str] = {}
     if todo:  # warm-up: the first request of a process is often answered 429 on the cookie/crumb fetch
         try:
             yf.download("SPY", period="5d", interval="1d", progress=False, threads=False, timeout=30)
@@ -105,15 +152,9 @@ def download_raw(
         time.sleep(pause)
     for ci, i in enumerate(range(0, len(todo), chunk_size), start=1):
         remaining = todo[i : i + chunk_size]
+        unknown_tries: dict[str, int] = {}
         for attempt in range(1, retries + 1):
-            df = None
-            try:
-                df = yf.download(
-                    remaining, start=start, end=end, interval="1d", auto_adjust=False,
-                    group_by="ticker", threads=False, progress=False, timeout=60,
-                )
-            except Exception as e:  # noqa: BLE001
-                logger.warning(f"chunk {ci}/{n_chunks} attempt {attempt}: {e}")
+            df, msgs = _download_chunk(remaining, start, end)
             got: list[str] = []
             if df is not None and not df.empty:
                 for sym in remaining:
@@ -125,14 +166,27 @@ def download_raw(
             remaining = [s for s in remaining if s not in got]
             if not remaining:
                 break
-            rl = _rate_limited(remaining)
-            kind = "rate-limited" if (rl or df is None) else "unknown error"
-            if attempt < retries:  # always retry: Yahoo's failures are transient far more often than not
+            kinds = {s: _classify(msgs.get(s) or msgs.get("__ALL__")) for s in remaining}
+            if not got and all(k != "no_data" for k in kinds.values()):
+                kinds = {s: "rate_limited" for s in remaining}  # whole chunk failed without a clear reason
+            for s, k in kinds.items():
+                if k == "no_data":
+                    no_data[s] = msgs.get(s, "no data")
+                elif k == "unknown":
+                    unknown_tries[s] = unknown_tries.get(s, 0) + 1
+                    if unknown_tries[s] >= 2:
+                        no_data[s] = msgs.get(s, "unknown error, gave up")
+            remaining = [s for s in remaining if s not in no_data]
+            if not remaining:
+                break
+            if attempt < retries:
                 wait = backoff * attempt
-                logger.warning(f"chunk {ci}/{n_chunks}: {len(remaining)} symbols failed ({kind}); retry in {wait:.0f}s (attempt {attempt}/{retries})")
+                logger.warning(f"chunk {ci}/{n_chunks}: {len(remaining)} symbols pending ({sorted(set(kinds[s] for s in remaining))}); retry in {wait:.0f}s (attempt {attempt}/{retries})")
                 time.sleep(wait)
             else:
-                logger.warning(f"chunk {ci}/{n_chunks}: giving up on {remaining} ({kind})")
+                logger.warning(f"chunk {ci}/{n_chunks}: giving up on {remaining}")
+                for s in remaining:
+                    no_data[s] = msgs.get(s, "retries exhausted")
         if remaining and stooq_fallback:
             for sym in list(remaining):
                 sub = download_stooq(sym, start, end)
@@ -140,13 +194,19 @@ def download_raw(
                     sub.to_csv(out_dir / f"{sym}.csv", index=False)
                     done[sym] = out_dir / f"{sym}.csv"
                     remaining.remove(sym)
+                    no_data.pop(sym, None)
                     logger.info(f"{sym}: filled from Stooq")
                 time.sleep(1.0)
-        logger.info(f"chunk {ci}/{n_chunks} done; total files {len(done)}")
+        logger.info(f"chunk {ci}/{n_chunks} done; files {len(done)}, no-data so far {len(no_data)}")
         time.sleep(pause)
-    failed = [s for s in symbols if s not in done]
-    if failed:
-        logger.warning(f"{len(failed)} symbols without data: {failed}")
+    if no_data_path and no_data:
+        p = Path(no_data_path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        stamp = time.strftime("%Y-%m-%d")
+        with p.open("a") as fh:
+            for s, why in sorted(no_data.items()):
+                fh.write(f"{s}\t{stamp}\t{why[:80]}\n")
+        logger.warning(f"{len(no_data)} symbols without data recorded in {p.name}: {sorted(no_data)[:15]}{' ...' if len(no_data) > 15 else ''}")
     return done
 
 

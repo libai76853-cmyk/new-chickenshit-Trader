@@ -1,0 +1,71 @@
+{
+ "window": [
+  "2010-01-01",
+  "2026-09-22"
+ ],
+ "change_rows": 356,
+ "additions": 338,
+ "removals": 335,
+ "distinct_removed_tickers": 331,
+ "removed_tickers_with_data": 119,
+ "removed_by_category": {
+  "acquisition": {
+   "tickers": 158,
+   "with_data": 16
+  },
+  "bankruptcy/delisting": {
+   "tickers": 1,
+   "with_data": 1
+  },
+  "corporate action": {
+   "tickers": 32,
+   "with_data": 14
+  },
+  "demotion": {
+   "tickers": 127,
+   "with_data": 85
+  },
+  "other": {
+   "tickers": 15,
+   "with_data": 3
+  }
+ },
+ "spells_total": 836,
+ "spells_kept": 613,
+ "spells_dropped_by_reason": {
+  "no_data": 200,
+  "ticker_reuse_or_late_data": 23
+ },
+ "member_days_total": 3058917,
+ "member_days_with_data": 2583093,
+ "symbols_total": 819,
+ "symbols_kept": 605,
+ "current_members": 503,
+ "diagnostics": {
+  "renamed_or_missing_removal": 19,
+  "removed_without_addition": 248,
+  "readded_without_event": 4,
+  "current_removed_recently": 0
+ },
+ "renamed_or_missing_removal": [
+  "ACT",
+  "BUD",
+  "CCR",
+  "COG",
+  "DLPH",
+  "FB",
+  "FLT",
+  "FSR",
+  "HRS",
+  "JEC",
+  "JOYG",
+  "KORS",
+  "LUK",
+  "NCC",
+  "PCLN",
+  "RE",
+  "SATS",
+  "TSO",
+  "WLP"
+ ]
+}
