@@ -164,10 +164,11 @@ def fetch_all(cik_map: dict[str, int], cache_dir: Path, refresh: bool = False) -
 
 
 # ----------------------------------------------------------------------------- events
-def signal_dates(accepted: pd.Series, calendar: pd.DatetimeIndex, tz: str = "US/Eastern", cutoff: str = "16:00") -> pd.Series:
+def signal_dates(accepted: pd.Series, calendar: pd.DatetimeIndex, tz: str = "UTC", cutoff: str = "16:00") -> pd.Series:
     """First trading day whose close (cutoff, ET) is at/after the acceptance time.
-    EDGAR's acceptanceDateTime strings end with 'Z' but the SEC documents them as Eastern time; `tz` says how
-    to read the naive timestamp."""
+    EDGAR's acceptanceDateTime is genuine UTC (verified: Apple's ~16:30 ET earnings 8-Ks show 20:30Z in summer
+    and 21:30Z in winter); it is converted to US/Eastern before applying the 16:00 cutoff. `tz` only exists to
+    reinterpret the naive timestamp if that ever changes."""
     ts = pd.to_datetime(accepted.astype(str).str.replace("Z", "", regex=False), errors="coerce")
     ts = ts.dt.tz_localize(tz, ambiguous="NaT", nonexistent="shift_forward") if tz != "UTC" else ts.dt.tz_localize("UTC").dt.tz_convert("US/Eastern")
     day = ts.dt.normalize().dt.tz_localize(None)
@@ -181,7 +182,7 @@ def signal_dates(accepted: pd.Series, calendar: pd.DatetimeIndex, tz: str = "US/
     return out
 
 
-def build_events(filings: pd.DataFrame, cik_map: dict[str, int], calendar: pd.DatetimeIndex, start: str, tz: str = "US/Eastern") -> pd.DataFrame:
+def build_events(filings: pd.DataFrame, cik_map: dict[str, int], calendar: pd.DatetimeIndex, start: str, tz: str = "UTC") -> pd.DataFrame:
     """One row per (symbol, filing): form, items list, acceptance time, signal date, item-group flags."""
     f = filings[filings["form"].isin(["8-K", "8-K/A"])].copy()
     f = f[pd.to_datetime(f["filingDate"]) >= pd.Timestamp(start) - pd.Timedelta(days=10)]

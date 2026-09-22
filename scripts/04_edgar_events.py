@@ -25,7 +25,7 @@ def main() -> None:
     ap.add_argument("--start", default="2010-01-01")
     ap.add_argument("--eval-start", default="2022-01-01")
     ap.add_argument("--eval-end", default=None)
-    ap.add_argument("--tz", default="US/Eastern", help="how to read EDGAR acceptanceDateTime (US/Eastern or UTC)")
+    ap.add_argument("--tz", default="UTC", help="EDGAR acceptanceDateTime is UTC (verified); US/Eastern only for what-if")
     ap.add_argument("--refresh", action="store_true")
     ap.add_argument("--tag", default=None)
     args = ap.parse_args()

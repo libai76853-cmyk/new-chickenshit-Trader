@@ -29,7 +29,7 @@ def test_build_events_flags():
         "accessionNumber": ["0001-24-1", "0001-24-2", "0001-24-3"],
         "filingDate": ["2024-07-25", "2024-07-26", "2024-07-26"],
         "reportDate": ["2024-07-25", "2024-07-26", "2024-07-26"],
-        "acceptanceDateTime": ["2024-07-25T16:30:00.000Z", "2024-07-26T08:00:00.000Z", "2024-07-26T08:00:00.000Z"],
+        "acceptanceDateTime": ["2024-07-25T20:30:00.000Z", "2024-07-26T12:00:00.000Z", "2024-07-26T12:00:00.000Z"],  # UTC: 16:30 ET / 08:00 ET
         "form": ["8-K", "8-K/A", "10-Q"],
         "items": ["2.02,9.01", "4.02,5.02", None],
         "primaryDocument": ["a.htm", "b.htm", "c.htm"], "primaryDocDescription": ["", "", ""], "size": [1, 1, 1],
