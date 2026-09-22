@@ -64,11 +64,16 @@ def html_to_text(raw: str) -> str:
 def pick_exhibit_99(index: dict) -> str | None:
     """Name of the first EX-99* document (press release) in a filing folder, if any."""
     items = index.get("directory", {}).get("item", [])
-    names = [it["name"] for it in items]
-    for n in names:
-        if re.search(r"(?i)ex[-_]?99", n) and n.lower().endswith((".htm", ".html", ".txt")):
-            return n
-    return None
+    names = [it["name"] for it in items if it["name"].lower().endswith((".htm", ".html", ".txt"))]
+    names = [n for n in names if not re.search(r"(?i)index|^r\d+\.htm$", n)]
+    # e.g. exhibit991earningsrelease1.htm, a2026-01x278xkerexhibit99.htm, d948568dex991.htm, ex-99.1.htm, ex_99_1.htm
+    pat = re.compile(r"(?i)(ex(hibit)?[-_. ]?99|xex99|[-_]99[-_.]?\d?\.htm)")
+    hits = [n for n in names if pat.search(n)]
+    if not hits:
+        return None
+    # prefer 99.1 / first exhibit
+    hits.sort(key=lambda n: (0 if re.search(r"99[-_.]?1\b|991", n) else 1, n))
+    return hits[0]
 
 
 def item_sections(text: str, max_chars: int = 2500) -> dict[str, str]:
@@ -96,7 +101,11 @@ def event_text(cik: int, accession: str, items: list[str], cache_dir: Path, prim
         raw = fetch_document(cik, accession, ex, cache_dir)
         if raw:
             t = html_to_text(raw)
-            return {"source": ex, "text": t[:max_chars]}
+            # drop the exhibit header boilerplate ("EX-99.1 | 2 | filename | EX-99.1 | Document | Exhibit 99.1")
+            m = re.search(r"(?i)exhibit\s*99(\.\d)?\s*\n", t[:600])
+            if m:
+                t = t[m.end():]
+            return {"source": ex, "text": t.strip()[:max_chars]}
     name = primary or next((it["name"] for it in idx.get("directory", {}).get("item", []) if it["name"].lower().endswith((".htm", ".html"))), None)
     if not name:
         return {"source": None, "text": ""}
