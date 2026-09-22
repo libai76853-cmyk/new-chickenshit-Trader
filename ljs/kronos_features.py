@@ -304,6 +304,26 @@ def evaluate(features_path: Path, norm_dir: Path, pred_len: int, out_json: Path,
     for feat in ["kr_vol", "kr_pvol", "vol20"]:
         ic = _spearman_by_date(df, feat, "rv")
         res["signals"][f"{feat}|rv"] = {"rank_ic": float(ic.mean()), "std": float(ic.std()), "t": float(ic.mean() / ic.std() * np.sqrt(len(ic))), "n": int(len(ic)), "pos": float((ic > 0).mean())}
+    # criterion 2: is kr_ret just a restatement of momentum / reversal? (a) rank correlations with the controls,
+    # (b) RankIC of the cross-sectionally residualized kr_ret (rank-regressed on the controls) vs r_exec
+    controls = ["mom5", "mom20", "mom60", "rev1", "vol20"]
+    res["kr_ret_vs_controls"] = {c: float(df.groupby("date").apply(lambda g: g["kr_ret"].corr(g[c], method="spearman")).mean()) for c in controls}
+
+    def _resid(g):
+        sub = g.dropna(subset=["kr_ret"] + controls)
+        if len(sub) < 50:
+            return pd.Series(np.nan, index=g.index)
+        X = np.column_stack([sub[c].rank().values for c in controls] + [np.ones(len(sub))])
+        y = sub["kr_ret"].rank().values
+        beta, *_ = np.linalg.lstsq(X, y, rcond=None)
+        out = pd.Series(np.nan, index=g.index)
+        out.loc[sub.index] = y - X @ beta
+        return out
+
+    df["kr_ret_resid"] = df.groupby("date", group_keys=False).apply(_resid)
+    for target in ["r_exec", "r_now"]:
+        ic = _spearman_by_date(df, "kr_ret_resid", target)
+        res["signals"][f"kr_ret_resid|{target}"] = {"rank_ic": float(ic.mean()), "std": float(ic.std()), "t": float(ic.mean() / ic.std() * np.sqrt(len(ic))), "n": int(len(ic)), "pos": float((ic > 0).mean())}
     # quintile spread of kr_ret on the executable return
     def q_spread(g):
         if g["kr_ret"].notna().sum() < 50:
@@ -325,5 +345,6 @@ def evaluate(features_path: Path, norm_dir: Path, pred_len: int, out_json: Path,
     q = res["kr_ret_q5_minus_q1"]
     L.append(f"\nkr_ret 五分位多空（Q5−Q1）每期均值 {q['mean_per_period']*100:.3f}%，t {q['t']:.2f}，粗略年化 {q['annualized_approx']*100:.1f}%（不含成本）。\n")
     L.append("kr_ret 对 r_exec 的 RankIC 按年：" + ", ".join(f"{y}: {v:.4f}" for y, v in res["kr_ret_by_year"].items()) + "\n")
+    L.append("kr_ret 与对照信号的横截面 Spearman 相关（按日均值）：" + ", ".join(f"{c}: {v:.3f}" for c, v in res["kr_ret_vs_controls"].items()) + "。`kr_ret_resid` 是把 kr_ret 的秩对这些对照的秩逐日回归后的残差。\n")
     out_md.write_text("\n".join(L), encoding="utf-8")
     return res
